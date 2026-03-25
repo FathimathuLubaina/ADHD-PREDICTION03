@@ -80,6 +80,7 @@ export default function HistoryPage() {
   const { apiClient } = useAuth();
   const navigate = useNavigate();
   const [history, setHistory] = useState([]);
+  const [analyticsRecords, setAnalyticsRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -87,8 +88,13 @@ export default function HistoryPage() {
     const load = async () => {
       try {
         setError('');
-        const res = await apiClient.get('/assessments/history');
-        setHistory(res.data.history || []);
+        // Keep user history list as-is, but compute dashboard stats from all stored assessments.
+        const [historyRes, analyticsRes] = await Promise.all([
+          apiClient.get('/assessments/history'),
+          apiClient.get('/assessments/analytics').catch(() => ({ data: { assessments: [] } }))
+        ]);
+        setHistory(historyRes.data.history || []);
+        setAnalyticsRecords(analyticsRes.data.assessments || []);
       } catch (err) {
         console.error(err);
         setError('Could not load history. Please try again.');
@@ -102,9 +108,9 @@ export default function HistoryPage() {
   const latest = history[0];
   const totalCount = history.length;
 
-  // Analytics stats computed from history (existing stored data)
+  // Analytics stats computed from all stored assessments.
   const stats = useMemo(() => {
-    if (!Array.isArray(history) || history.length === 0) {
+    if (!Array.isArray(analyticsRecords) || analyticsRecords.length === 0) {
       return {
         total: 0,
         likelyCount: 0,
@@ -119,11 +125,11 @@ export default function HistoryPage() {
       };
     }
 
-    const likelyCount = history.filter((a) => isLikelyADHD(a.result)).length;
-    const notLikelyCount = history.filter((a) => isNotLikelyADHD(a.result)).length;
-    const total = history.length;
+    const likelyCount = analyticsRecords.filter((a) => isLikelyADHD(a.result)).length;
+    const notLikelyCount = analyticsRecords.filter((a) => isNotLikelyADHD(a.result)).length;
+    const total = analyticsRecords.length;
 
-    const scores = history.map((a) => Number(a.total_score ?? 0)).filter((s) => !isNaN(s));
+    const scores = analyticsRecords.map((a) => Number(a.total_score ?? 0)).filter((s) => !isNaN(s));
     const sum = scores.reduce((acc, s) => acc + s, 0);
     const avgScore = scores.length ? Math.round((sum / scores.length) * 10) / 10 : 0;
     const maxScore = scores.length ? Math.max(...scores) : 0;
@@ -131,14 +137,14 @@ export default function HistoryPage() {
 
     const scoreBuckets = SCORE_RANGES.map((range) => ({
       ...range,
-      count: history.filter((a) => {
+      count: analyticsRecords.filter((a) => {
         const s = Number(a.total_score ?? 0);
         return !isNaN(s) && s >= range.min && s <= range.max;
       }).length
     }));
 
     const byDate = {};
-    history.forEach((a) => {
+    analyticsRecords.forEach((a) => {
       const date = a.created_at ? a.created_at.split('T')[0] : 'unknown';
       if (!byDate[date]) byDate[date] = [];
       byDate[date].push(Number(a.total_score ?? 0));
@@ -164,7 +170,7 @@ export default function HistoryPage() {
       scoreBuckets,
       trendData
     };
-  }, [history]);
+  }, [analyticsRecords]);
 
   const otherCount = stats.total - stats.likelyCount - stats.notLikelyCount;
   const doughnutData = useMemo(() => {
@@ -264,7 +270,7 @@ export default function HistoryPage() {
       </header>
 
       {/* Analytics section - summary cards & charts */}
-      {!loading && !error && history.length > 0 && (
+      {!loading && !error && stats.total > 0 && (
         <section className="history-analytics">
           <h2 className="history-analytics-title">Analytics</h2>
           <div className="analytics-cards">
